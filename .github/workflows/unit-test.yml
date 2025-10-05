@@ -1,33 +1,55 @@
-name: Unit Tests
+name: Build WDA with Frameworks
 
-on: [pull_request, push]
-
+on:
+  workflow_dispatch:
 
 jobs:
-  prepare_matrix:
-    runs-on: ubuntu-latest
-    outputs:
-      versions: ${{ steps.generate-matrix.outputs.lts }}
+  build:
+    runs-on: macos-13
+    
     steps:
-    - name: Select all current LTS versions of Node.js
-      id: generate-matrix
-      uses: msimerson/node-lts-versions@v1
-
-  test:
-    needs:
-    - prepare_matrix
-    strategy:
-      matrix:
-        node-version: ${{ fromJSON(needs.prepare_matrix.outputs.versions) }}
-    runs-on: macos-latest
-    steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-node@v3
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Select Xcode 14
+      run: sudo xcode-select -s /Applications/Xcode_14.3.1.app
+      
+    - name: Bootstrap WDA
+      run: ./Scripts/bootstrap.sh -d
+      
+    - name: Build WDA with embedded frameworks
+      run: |
+        xcodebuild build-for-testing \
+          -project WebDriverAgent.xcodeproj \
+          -scheme WebDriverAgentRunner \
+          -destination 'generic/platform=iOS' \
+          -derivedDataPath build \
+          ARCHS=arm64 \
+          ONLY_ACTIVE_ARCH=NO \
+          ENABLE_BITCODE=NO
+    
+    - name: Verify Frameworks exist
+      run: |
+        ls -lah build/Build/Products/Debug-iphoneos/WebDriverAgentRunner-Runner.app/Frameworks/ || echo "Frameworks folder missing!"
+        
+    - name: Create IPA with frameworks
+      run: |
+        cd build/Build/Products/Debug-iphoneos/
+        mkdir Payload
+        cp -r WebDriverAgentRunner-Runner.app Payload/
+        cd Payload/WebDriverAgentRunner-Runner.app
+        if [ -d "Frameworks" ]; then
+          echo "Frameworks folder exists, size:"
+          du -sh Frameworks/
+        else
+          echo "ERROR: No Frameworks folder!"
+          exit 1
+        fi
+        cd ../..
+        zip -r WebDriverAgent-WithFrameworks.ipa Payload/
+        
+    - name: Upload IPA
+      uses: actions/upload-artifact@v3
       with:
-        node-version: ${{ matrix.node-version }}
-    - run: npm install --no-package-lock
-      name: Install dev dependencies
-    - run: npm run lint
-      name: Run linter
-    - run: npm run test
-      name: Run unit tests
+        name: WebDriverAgent-iOS16-Complete
+        path: build/Build/Products/Debug-iphoneos/WebDriverAgent-WithFrameworks.ipa
