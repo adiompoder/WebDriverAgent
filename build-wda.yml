@@ -1,0 +1,39 @@
+name: Build WDA for iOS 16
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-13
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Select Xcode
+      run: sudo xcode-select -s /Applications/Xcode_14.3.1.app
+      
+    - name: Build WDA
+      run: |
+        xcodebuild build-for-testing \
+          -project WebDriverAgent.xcodeproj \
+          -scheme WebDriverAgentRunner \
+          -destination 'generic/platform=iOS' \
+          -derivedDataPath build \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO
+    
+    - name: Create IPA
+      run: |
+        cd build/Build/Products/Debug-iphoneos/
+        mkdir Payload
+        cp -r WebDriverAgentRunner-Runner.app Payload/
+        zip -r WebDriverAgent.ipa Payload/
+        
+    - name: Upload IPA
+      uses: actions/upload-artifact@v3
+      with:
+        name: WebDriverAgent-iOS16
+        path: build/Build/Products/Debug-iphoneos/WebDriverAgent.ipa
