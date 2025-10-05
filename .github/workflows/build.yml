@@ -1,0 +1,52 @@
+name: Build WDA for Real Device
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-13
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: List Xcode versions
+      run: ls /Applications/ | grep Xcode
+      
+    - name: Select Xcode
+      run: sudo xcode-select -s /Applications/Xcode_14.3.1.app
+      
+    - name: Build WDA
+      run: |
+        xcodebuild build-for-testing \
+          -project WebDriverAgent.xcodeproj \
+          -scheme WebDriverAgentRunner \
+          -destination 'generic/platform=iOS' \
+          -derivedDataPath build
+    
+    - name: Check what was built
+      run: |
+        echo "Build output:"
+        ls -lh build/Build/Products/Debug-iphoneos/
+        echo "Checking app contents:"
+        ls -lh build/Build/Products/Debug-iphoneos/WebDriverAgentRunner-Runner.app/
+        if [ -d "build/Build/Products/Debug-iphoneos/WebDriverAgentRunner-Runner.app/Frameworks" ]; then
+          echo "Frameworks folder exists:"
+          ls -lh build/Build/Products/Debug-iphoneos/WebDriverAgentRunner-Runner.app/Frameworks/
+        else
+          echo "No Frameworks folder"
+        fi
+        
+    - name: Create IPA
+      run: |
+        cd build/Build/Products/Debug-iphoneos/
+        mkdir Payload
+        cp -r WebDriverAgentRunner-Runner.app Payload/
+        zip -r WDA.ipa Payload/
+        
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: WebDriverAgent
+        path: build/Build/Products/Debug-iphoneos/WDA.ipa
