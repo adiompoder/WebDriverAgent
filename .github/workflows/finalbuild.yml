@@ -1,0 +1,57 @@
+name: Build WDA with XCTest Framework
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-13
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Select Xcode
+      run: sudo xcode-select -s /Applications/Xcode_14.3.1.app
+      
+    - name: Build WDA
+      run: |
+        xcodebuild build-for-testing \
+          -project WebDriverAgent.xcodeproj \
+          -scheme WebDriverAgentRunner \
+          -destination 'generic/platform=iOS' \
+          -derivedDataPath build \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO
+    
+    - name: Manually embed XCTest framework
+      run: |
+        APP_PATH="build/Build/Products/Debug-iphoneos/WebDriverAgentRunner-Runner.app"
+        FRAMEWORKS_PATH="$APP_PATH/Frameworks"
+        XCODE_FRAMEWORKS="/Applications/Xcode_14.3.1.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/Library/Frameworks"
+        
+        echo "Creating Frameworks folder..."
+        mkdir -p "$FRAMEWORKS_PATH"
+        
+        echo "Copying XCTest.framework..."
+        cp -R "$XCODE_FRAMEWORKS/XCTest.framework" "$FRAMEWORKS_PATH/"
+        
+        echo "Verifying frameworks copied:"
+        ls -lh "$FRAMEWORKS_PATH"
+        du -sh "$FRAMEWORKS_PATH"
+        
+    - name: Create IPA
+      run: |
+        cd build/Build/Products/Debug-iphoneos/
+        mkdir Payload
+        cp -r WebDriverAgentRunner-Runner.app Payload/
+        zip -r WDA-WithFrameworks.ipa Payload/
+        echo "IPA size:"
+        ls -lh WDA-WithFrameworks.ipa
+        
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: WebDriverAgent-Complete
+        path: build/Build/Products/Debug-iphoneos/WDA-WithFrameworks.ipa
