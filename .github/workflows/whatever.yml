@@ -1,0 +1,137 @@
+name: Build WebDriverAgent Runner (device .app + IPA)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-wda:
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Print Xcode info
+        run: |
+          echo "xcode-select -> $(xcode-select -p)"
+          xcodebuild -version
+
+      - name: Ensure Git submodules (if any)
+        run: |
+          git submodule update --init --recursive || true
+
+      - name: Clean previous derived data
+        run: |
+          rm -rf build || true
+
+      - name: Build WebDriverAgentRunner (device)
+        run: |
+          set -e
+          PROJECT="WebDriverAgent.xcodeproj"
+          SCHEME="WebDriverAgentRunner"
+          DERIVED="build"
+          # If you use workspace (CocoaPods) switch -project -> -workspace and add -scheme accordingly
+          xcodebuild clean -project "$PROJECT" -scheme "$SCHEME" -configuration Debug -derivedDataPath "$DERIVED" || true
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$DERIVED" \
+            -configuration Debug \
+            build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Verify built product exists
+        run: |
+          APP="build/Build/Products/Debug-iphoneos/WebDriverAgentRunner-Runner.app"
+          echo "Checking: $APP"
+          if [ ! -d "$APP" ]; then
+            echo "ERROR: built .app not found at $APP"
+            ls -la build/Build/Products || true
+            exit 1
+          fi
+          echo "Built .app contents:"
+          ls -la "$APP"
+
+      - name: Inspect binary arch (sanity)
+        run: |
+          APP_BIN="build/Build/Products/Debug-iphoneos/WebDriverAgentRunner-Runner.app/WebDriverAgentRunner-Runner"
+          echo "Binary info:"
+          file "$APP_BIN" || true
+          echo "Linked libraries (if otool exists):"
+          otool -L "$APP_BIN" || true
+
+      - name: Embed XCTest.framework (if needed)
+        run: |
+          APP="build/Build/Products/Debug-iphoneos/WebDriverAgentRunner-Runner.app"
+          FRAMEWORKS="$APP/Frameworks"
+          XCODE_FW="$(xcode-select -p)/Platforms/iPhoneOS.platform/Developer/Library/Frameworks"
+          mkdir -p "$FRAMEWORKS"
+          if [ -d "$XCODE_FW/XCTest.framework" ]; then
+            cp -R "$XCODE_FW/XCTest.framework" "$FRAMEWORKS/"
+            echo "XCTest copied to $FRAMEWORKS"
+            ls -la "$FRAMEWORKS"
+          else
+            echo "XCTest.framework not found at $XCODE_FW — skipping copy"
+          fi
+
+      - name: Fix permissions in .app (so deploy is easier)
+        run: |
+          APP="build/Build/Products/Debug-iphoneos/WebDriverAgentRunner-Runner.app"
+          chmod -R 755 "$APP" || true
+          find "$APP" -type f -perm -o=x -print || true
+
+      - name: Create IPA artifact
+        run: |
+          cd build/Build/Products/Debug-iphoneos
+          rm -rf Payload || true
+          mkdir -p Payload
+          cp -r WebDriverAgentRunner-Runner.app Payload/
+          zip -r WDA-WithFrameworks.ipa Payload > /dev/null
+          ls -lh WDA-WithFrameworks.ipa || true
+
+      - name: Upload artifacts (.app + ipa)
+        uses: actions/upload-artifact@v4
+        with:
+          name: WebDriverAgent-Products
+          path: |
+            build/Build/Products/Debug-iphoneos/WebDriverAgentRunner-Runner.app
+            build/Build/Products/Debug-iphoneos/WDA-WithFrameworks.ipa
+
+      # ---------------------------------------------------------------------
+      # Optional: Auto-deploy to device via SSH (UNCOMMENT / enable to use)
+      # Requires repository secrets: SSH_HOST, SSH_USER, SSH_KEY (private key)
+      # The mac runner must be able to reach the device IP. Keep disabled by default.
+      # ---------------------------------------------------------------------
+
+      - name: Optional: Deploy to device via SCP (disabled by default)
+        if: false
+        uses: appleboy/scp-action@v0.1.9
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          source: "build/Build/Products/Debug-iphoneos/WebDriverAgentRunner-Runner.app"
+          target: "/tmp/WebDriverAgentRunner-Runner.app"
+
+      - name: Optional: Remote install steps (disabled by default)
+        if: false
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+        run: |
+          echo "Template remote install steps — run these ON DEVICE as root (or adapt for your setup)"
+          echo "mv /tmp/WebDriverAgentRunner-Runner.app /Applications/"
+          echo "chmod -R 755 /Applications/WebDriverAgentRunner-Runner.app"
+          echo "which ldid || echo 'ldid missing: install via Cydia'"
+          echo "ldid -S /Applications/WebDriverAgentRunner-Runner.app/WebDriverAgentRunner-Runner || true"
+          echo "uicache --all"
+          echo "/Applications/WebDriverAgentRunner-Runner.app/WebDriverAgentRunner-Runner &> /var/mobile/tmp/wda.log & disown"
+          echo "curl -m 3 http://127.0.0.1:8100/status || curl -m 3 http://<device-ip>:8100/status || true"
